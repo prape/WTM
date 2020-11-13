@@ -4,6 +4,7 @@
     <Description>WalkingTec.Mvvm</Description>
     <AssemblyName>WalkingTec.Mvvm.Mvc.Admin</AssemblyName>
     <Title>$(AssemblyName)</Title>
+    <LangVersion>latest</LangVersion>
     <OutputType>Library</OutputType>
     <IsPackable>true</IsPackable>
   </PropertyGroup>
@@ -46,10 +47,6 @@
     <EmbeddedResource Include="Areas\_Admin\Views\FrameworkRole\Index.cshtml" />
     <EmbeddedResource Include="Areas\_Admin\Views\FrameworkRole\PageFunction.cshtml" />
     <EmbeddedResource Include="Areas\_Admin\Views\_ViewImports.cshtml" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <PackageReference Include="Microsoft.VisualStudio.Web.CodeGeneration.Design" Version="3.1.0" />
   </ItemGroup>
 
   <ItemGroup>

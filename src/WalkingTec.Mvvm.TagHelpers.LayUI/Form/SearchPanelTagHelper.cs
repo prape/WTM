@@ -115,6 +115,10 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
             var baseVM = Vm?.Model as BaseVM;
             var tempSearchTitleId = Guid.NewGuid().ToNoSplitString();
             bool show = false;
+            if(ListVM?.Searcher?.IsExpanded != null)
+            {
+                Expanded = ListVM?.Searcher?.IsExpanded;
+            }
             if(Expanded != null)
             {
                 show = Expanded.Value;
@@ -125,12 +129,12 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
             }
             var layuiShow = show ? " layui-show" : string.Empty;
             output.PreContent.AppendHtml($@"
-<div class=""layui-collapse"" style=""margin-bottom:5px;"" lay-filter=""{tempSearchTitleId}"">
+<div class=""layui-collapse"" style=""margin-bottom:5px;"" lay-filter=""{tempSearchTitleId}x"">
   <div class=""layui-colla-item"">
     <h2 class=""layui-colla-title"">{Program._localizer["SearchCondition"]}
       <div style=""text-align:right;margin-top:-43px;"" id=""{tempSearchTitleId}"">
         <a href=""javascript:void(0)"" class=""layui-btn layui-btn-sm"" id=""{SearchBtnId}""><i class=""layui-icon"">&#xe615;</i>{Program._localizer["Search"]}</a>
-        {(!ResetBtn ? string.Empty : $@"<button type=""reset"" class=""layui-btn layui-btn-sm"" id=""{ResetBtnId}"">{Program._localizer["Reset"]}</button>")}
+        {(!ResetBtn ? string.Empty : $@"<button type=""button"" class=""layui-btn layui-btn-sm"" id=""{ResetBtnId}"">{Program._localizer["Reset"]}</button>")}
       </div>
     </h2>
     <div class=""layui-colla-content{layuiShow}"" >
@@ -143,17 +147,23 @@ namespace WalkingTec.Mvvm.TagHelpers.LayUI
 ");
             output.PostElement.AppendHtml($@"
 <script>
-  layui.use(['table'], function () {{
+  layui.use(['table','element'], function () {{
     const table = layui.table;
     layui.element.init();
     $('#{tempSearchTitleId} .layui-btn').on('click',function(e){{e.stopPropagation();}})
-    $('#{ResetBtnId}').on('click', function (btn) {{
-      ff.resetForm(this.form.id);
-    }});
+    $('#{ResetBtnId}').on('click', function (btn) {{ff.resetForm(this.form.id);}});
+    $('#{tempSearchTitleId}').parents('form').append(""<input type='hidden' name='Searcher.IsExpanded' value='{show.ToString().ToLower()}' />"");
+layui.element.on('collapse({tempSearchTitleId}x)', function(data){{
+    $('#{tempSearchTitleId}').parents('form').find(""input[name='Searcher.IsExpanded']"").val(data.show+'');
+}});
+
 {(OldPost == true ? $"" : $@"
 $('#{SearchBtnId}').on('click', function () {{
   var layer = layui.layer;
-  table.reload('{GridId}',{{where: $.extend(JSON.parse(JSON.stringify({TableJSVar}.config.where)),ff.GetSearchFormData('{Id}','{Vm.Name}')),
+    var tempwhere = {{}};
+    $.extend(tempwhere,{GridId}defaultfilter.where);
+      {GridId}filterback.where = tempwhere;
+  table.reload('{GridId}',{{where: $.extend(tempwhere,ff.GetSearchFormData('{Id}','{Vm.Name}')),
     //done: function(res,curr,count){{
     //  if(this.height == undefined){{
     //    var tab = $('#{GridId} + .layui-table-view');tab.css('overflow','hidden').addClass('donotuse_fill donotuse_pdiv');tab.children('.layui-table-box').addClass('donotuse_fill donotuse_pdiv').css('height','100px');tab.find('.layui-table-main').addClass('donotuse_fill');tab.find('.layui-table-header').css('min-height','40px');

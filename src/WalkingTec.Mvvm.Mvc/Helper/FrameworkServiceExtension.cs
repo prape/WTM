@@ -5,6 +5,7 @@ using System.IdentityModel.Tokens.Jwt;
 using System.IO;
 using System.Linq;
 using System.Net;
+using System.Net.Http;
 using System.Reflection;
 using System.Runtime.Loader;
 using Microsoft.AspNetCore.Authentication.Cookies;
@@ -39,7 +40,6 @@ using Microsoft.Extensions.Localization;
 using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Tokens;
 using Newtonsoft.Json;
-
 using WalkingTec.Mvvm.Core;
 using WalkingTec.Mvvm.Core.Auth;
 using WalkingTec.Mvvm.Core.Extensions;
@@ -53,6 +53,7 @@ namespace WalkingTec.Mvvm.Mvc
 {
     public static class FrameworkServiceExtension
     {
+        private static List<Assembly> _dynamicAssembly = new List<Assembly>();
         public static IServiceCollection AddFrameworkService(this IServiceCollection services,
             Func<ActionExecutingContext, string> CsSector = null,
             List<IDataPrivilege> dataPrivilegeSettings = null,
@@ -92,10 +93,11 @@ namespace WalkingTec.Mvvm.Mvc
                     .AddJsonFile($"appsettings.{env.EnvironmentName}.json", optional: true, reloadOnChange: true);
             }
             var config = configBuilder.Build();
+            var con = config.Get<Configs>() ?? new Configs();
 
             services.AddLocalization(options => options.ResourcesPath = "Resources");
             var gd = GetGlobalData();
-            var con = config.Get<Configs>() ?? new Configs();
+
             if (dataPrivilegeSettings != null)
             {
                 con.DataPrivilegeSettings = dataPrivilegeSettings;
@@ -140,11 +142,10 @@ namespace WalkingTec.Mvvm.Mvc
                     options.AddPolicy("_donotusedefault",
                         builder =>
                         {
-                            builder.WithOrigins("http://localhost",
-                                                "https://localhost")
-                                                .AllowAnyHeader()
-                                                .AllowAnyMethod()
-                                                .AllowCredentials();
+                            builder.SetIsOriginAllowed((a) => true)
+                                              .AllowAnyHeader()
+                                              .AllowAnyMethod()
+                                              .AllowCredentials();
                         });
                 }
             });
@@ -181,24 +182,28 @@ namespace WalkingTec.Mvvm.Mvc
                 options.ModelBinderProviders.Insert(0, new StringBinderProvider());
 
                 // Filters
-                options.Filters.Add(new AuthorizeFilter());
+                //options.Filters.Add(new AuthorizeFilter());
                 options.Filters.Add(new DataContextFilter(CsSector));
                 options.Filters.Add(new PrivilegeFilter());
                 options.Filters.Add(new FrameworkFilter());
+
+                options.ModelBindingMessageProvider.SetValueIsInvalidAccessor((x) => Core.Program._localizer["ValueIsInvalidAccessor",x]);
+                options.ModelBindingMessageProvider.SetAttemptedValueIsInvalidAccessor((x,y) => Core.Program._localizer["AttemptedValueIsInvalidAccessor",x,y]);
+                options.ModelBindingMessageProvider.SetValueMustNotBeNullAccessor((x) => Core.Program._localizer["ValueIsInvalidAccessor", x]);
                 options.EnableEndpointRouting = true;
             })
-            .ConfigureApplicationPartManager(m =>
+            .ConfigureApplicationPartManager(appPartsManager =>
             {
                 var feature = new ControllerFeature();
                 if (mvc != null)
                 {
-                    m.ApplicationParts.Add(new AssemblyPart(mvc));
+                    appPartsManager.ApplicationParts.Add(new AssemblyPart(mvc));
                 }
                 if (admin != null)
                 {
-                    m.ApplicationParts.Add(new AssemblyPart(admin));
+                    appPartsManager.ApplicationParts.Add(new AssemblyPart(admin));
                 }
-                m.PopulateFeature(feature);
+                appPartsManager.PopulateFeature(feature);
                 services.AddSingleton(feature.Controllers.Select(t => t.AsType()).ToArray());
             })
             .AddNewtonsoftJson(options =>
@@ -246,7 +251,7 @@ namespace WalkingTec.Mvvm.Mvc
             #region CookieWithJwtAuth
 
             // services.AddSingleton<UserStore>();
-            services.AddSingleton<ITokenService, TokenService>();
+            services.AddScoped<ITokenService, TokenService>();
 
             var jwtOptions = config.GetSection("JwtOptions").Get<JwtOptions>();
             if (jwtOptions == null)
@@ -294,14 +299,45 @@ namespace WalkingTec.Mvvm.Mvc
                             ValidateAudience = true,
                             ValidAudience = jwtOptions.Audience,
 
-                            ValidateIssuerSigningKey = false,
+                            ValidateIssuerSigningKey = true,
                             IssuerSigningKey = jwtOptions.SymmetricSecurityKey,
 
-                            ValidateLifetime = true
+                            ValidateLifetime = true,
+                            ClockSkew = TimeSpan.FromSeconds(1)
                         };
                     });
             #endregion
 
+            services.AddHttpClient();
+            if (con.Domains != null)
+            {
+                foreach (var item in con.Domains)
+                {
+                    services.AddHttpClient(item.Key, x =>
+                    {
+                        x.BaseAddress = new Uri(item.Value.Url);
+                        x.DefaultRequestHeaders.Add("Cache-Control", "no-cache");
+                        x.DefaultRequestHeaders.Add("User-Agent", "Mozilla/4.0 (compatible; MSIE 6.0; Windows NT 5.2; SV1; .NET CLR 1.1.4322; .NET CLR 2.0.50727)");
+                    }).ConfigurePrimaryHttpMessageHandler(() =>
+                    {
+                        return new HttpClientHandler() { AutomaticDecompression = DecompressionMethods.GZip, UseProxy = false, UseCookies = false };
+                    });
+                }
+            }
+
+            List<CultureInfo> supportedCultures = new List<CultureInfo>();
+            var lans = con.Languages.Split(",");
+            foreach (var lan in lans)
+            {
+                supportedCultures.Add(new CultureInfo(lan));
+            }
+
+            services.Configure<RequestLocalizationOptions>(options =>
+            {
+                options.DefaultRequestCulture = new RequestCulture(supportedCultures[0]);
+                options.SupportedCultures = supportedCultures;
+                options.SupportedUICultures = supportedCultures;
+            });
             GlobalServices.SetServiceProvider(services.BuildServiceProvider());
             return services;
         }
@@ -322,19 +358,7 @@ namespace WalkingTec.Mvvm.Mvc
             }
             if (string.IsNullOrEmpty(configs.Languages) == false)
             {
-                List<CultureInfo> supportedCultures = new List<CultureInfo>();
-                var lans = configs.Languages.Split(",");
-                foreach (var lan in lans)
-                {
-                    supportedCultures.Add(new CultureInfo(lan));
-                }
-
-                app.UseRequestLocalization(new RequestLocalizationOptions
-                {
-                    DefaultRequestCulture = new RequestCulture(supportedCultures[0]),
-                    SupportedCultures = supportedCultures,
-                    SupportedUICultures = supportedCultures
-                });
+                app.UseRequestLocalization();
             }
 
             app.UseExceptionHandler(configs.ErrorHandler);
@@ -404,8 +428,14 @@ namespace WalkingTec.Mvvm.Mvc
                     var cs = configs.ConnectionStrings;
                     foreach (var item in cs)
                     {
-                        var dc = item.CreateDC();
-                        dc.DataInit(gd.AllModule, test != null).Wait();
+                        try
+                        {
+                            var dc = item.CreateDC();
+                            dc.DataInit(gd.AllModule, test != null).Wait();
+                        }
+                        catch {
+                            int a = 0;
+                        }
                     }
                     GlobalServices.SetServiceProvider(app.ApplicationServices);
                 }
@@ -414,18 +444,26 @@ namespace WalkingTec.Mvvm.Mvc
                     context.Response.Cookies.Append("pagemode", configs.PageMode.ToString());
                     context.Response.Cookies.Append("tabmode", configs.TabMode.ToString());
                 }
-                context.Request.EnableBuffering();
-                context.Request.Body.Position = 0;
-                StreamReader tr = new StreamReader(context.Request.Body);
-                string body = tr.ReadToEndAsync().Result;
-                context.Request.Body.Position = 0;
-                if (context.Items.ContainsKey("DONOTUSE_REQUESTBODY") == false)
+                if (context.Request.ContentLength > 1024 * 1024 * 5)
                 {
-                    context.Items.Add("DONOTUSE_REQUESTBODY", body);
+                    context.Features.Get<IHttpMaxRequestBodySizeFeature>().MaxRequestBodySize = null;
                 }
                 else
                 {
-                    context.Items["DONOTUSE_REQUESTBODY"] = body;
+                    context.Request.EnableBuffering();
+                    context.Request.Body.Position = 0;
+                    StreamReader tr = new StreamReader(context.Request.Body);
+                    string body = tr.ReadToEndAsync().Result;
+                    context.Request.Body.Position = 0;
+                    if (context.Items.ContainsKey("DONOTUSE_REQUESTBODY") == false)
+                    {
+                        context.Items.Add("DONOTUSE_REQUESTBODY", body);
+                    }
+                    else
+                    {
+                        context.Items["DONOTUSE_REQUESTBODY"] = body;
+                    }
+
                 }
                 await next.Invoke();
                 if (context.Response.StatusCode == 404)
@@ -466,6 +504,7 @@ namespace WalkingTec.Mvvm.Mvc
 
             //获取所有程序集
             gd.AllAssembly = Utils.GetAllAssembly();
+            gd.AllAssembly.AddRange(_dynamicAssembly);
             var admin = GetRuntimeAssembly("WalkingTec.Mvvm.Mvc.Admin");
             if (admin != null && gd.AllAssembly.Contains(admin) == false)
             {
@@ -542,9 +581,9 @@ namespace WalkingTec.Mvvm.Mvc
                         {
                             ID = Guid.NewGuid(),
                             ParentId = modelmenu.ID,
-                            PageName = page.Module.ModuleName,
+                            PageName = page.Module.ActionDes == null ? page.Module.ModuleName : page.Module.ActionDes.Description,
                             Url = url
-                        });
+                        }) ;
                     }
                 }
             }
@@ -701,6 +740,8 @@ namespace WalkingTec.Mvvm.Mvc
                     var ada = attrs[0] as ActionDescriptionAttribute;
                     var nameKey = ada.GetDescription(ctrl);
                     model.ModuleName = nameKey;
+                    ada.SetLoccalizer(ctrl);
+                    model.ActionDes = ada;
                 }
                 else
                 {
@@ -743,8 +784,8 @@ namespace WalkingTec.Mvvm.Mvc
                         if (attrs2.Length > 0)
                         {
                             var ada = attrs2[0] as ActionDescriptionAttribute;
-                            var nameKey = ada.GetDescription(ctrl);
-                            action.ActionName = nameKey;
+                            ada.SetLoccalizer(ctrl);
+                            action.ActionDes = ada;
                         }
                         else
                         {
@@ -794,8 +835,8 @@ namespace WalkingTec.Mvvm.Mvc
                         if (attrs2.Length > 0)
                         {
                             var ada = attrs2[0] as ActionDescriptionAttribute;
-                            string nameKey = ada.GetDescription(ctrl);
-                            action.ActionName = nameKey;
+                            ada.SetLoccalizer(ctrl);
+                            action.ActionDes = ada;
                         }
                         else
                         {
